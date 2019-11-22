@@ -41,6 +41,7 @@
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
+/* 根据数据类型，获取对应数据结构的尺寸 */
 static inline int sdsHdrSize(char type) {
     switch(type&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
@@ -57,15 +58,16 @@ static inline int sdsHdrSize(char type) {
     return 0;
 }
 
+/*字符串的数据类型，是根据字符串的长度选择不同类型的数据结构类型，这也是sds数据结构十分紧凑节约空间的原因之一*/
 static inline char sdsReqType(size_t string_size) {
-    if (string_size < 1<<5)
+    if (string_size < 1<<5) //2^5  = 32
         return SDS_TYPE_5;
-    if (string_size < 1<<8)
+    if (string_size < 1<<8) //2^8  = 256
         return SDS_TYPE_8;
-    if (string_size < 1<<16)
+    if (string_size < 1<<16) //2^16  = 65536
         return SDS_TYPE_16;
 #if (LONG_MAX == LLONG_MAX)
-    if (string_size < 1ll<<32)
+    if (string_size < 1ll<<32) //2^32
         return SDS_TYPE_32;
     return SDS_TYPE_64;
 #else
@@ -86,6 +88,10 @@ static inline char sdsReqType(size_t string_size) {
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
+/* 
+ * 根据给定的初始化字符串 init 和字符串长度 initlen
+ * 创建一个新的 sds
+ */
 sds sdsnewlen(const void *init, size_t initlen) {
     void *sh;
     sds s;
@@ -96,14 +102,27 @@ sds sdsnewlen(const void *init, size_t initlen) {
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
 
+    //分配对应的内存(结构体大小 + 数据长度 + ‘\0’)
     sh = s_malloc(hdrlen+initlen+1);
+
     if (init==SDS_NOINIT)
         init = NULL;
     else if (!init)
+        //没有指定初始化内容，将分配的内存，全部置为0
         memset(sh, 0, hdrlen+initlen+1);
+
+    //内存分配失败，返回
     if (sh == NULL) return NULL;
-    s = (char*)sh+hdrlen;
+
+    //提前设置要memcpy目标对象的起始位置，因为数据是存在后面的buf当中，
+    //前面的几位是存的字符串的数据属性信息
+    s = (char*)sh+hdrlen; 
+
+    //存数据指针往前倒推一位，刚好是存数据类型的指针（占1个char共8位，低3位为类型，
+    //高5位不用，对于SDS_TYPE_5高5位用于存字符串的长度）
     fp = ((unsigned char*)s)-1;
+
+    //根据type初始化对应字符串结构的属性信息
     switch(type) {
         case SDS_TYPE_5: {
             *fp = type | (initlen << SDS_TYPE_BITS);
@@ -138,9 +157,15 @@ sds sdsnewlen(const void *init, size_t initlen) {
             break;
         }
     }
+
+    //如果有指定初始化内容，将它们复制到sdshdr的buf中
     if (initlen && init)
         memcpy(s, init, initlen);
+    
+    //以 \0 结尾
     s[initlen] = '\0';
+
+    //返回buf部分，而不是整个sdshdr
     return s;
 }
 
@@ -209,11 +234,15 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     int hdrlen;
 
     /* Return ASAP if there is enough space left. */
+    //只要有足够的空间就立即返回，否则就继续执行分配空间的操作
     if (avail >= addlen) return s;
 
     len = sdslen(s);
     sh = (char*)s-sdsHdrSize(oldtype);
     newlen = (len+addlen);
+
+    //SDS_MAX_PREALLOC == 1MB,如果修改后的长度小于1M，则分配的空间是原来的2倍，否则增加1MB的空间
+    //使用空间预分配操作
     if (newlen < SDS_MAX_PREALLOC)
         newlen *= 2;
     else
@@ -234,6 +263,8 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     } else {
         /* Since the header size changes, need to move the string forward,
          * and can't use realloc */
+
+        /*新增空间后超过当前类型的长度，使用malloc,并把原字符串拷贝过去*/
         newsh = s_malloc(hdrlen+newlen+1);
         if (newsh == NULL) return NULL;
         memcpy((char*)newsh+hdrlen, s, len+1);
@@ -394,6 +425,15 @@ sds sdsgrowzero(sds s, size_t len) {
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
+/*
+ * 标准缓冲区溢出
+ * 
+ * 对于C字符串的操作函数来说，如果在修改字符串的时候忘了为字符串分配足够的空间，就有可能出现缓冲区溢出的情况。
+ * 而sds中的API就不会出现这种情况，它在修改sds之前，都会判断它是否有足够的空间完成接下来的操作。
+ * 
+ * 以下代码可以看出，在执行memcpy将字符串写入sds之前会调用sdsMakeRoomFor函数去检查sds字符串s是否有足够的空间，
+ * 如果没有足够空间，就为其分配足够的空间，从而杜绝了缓冲区溢出。
+ */
 sds sdscatlen(sds s, const void *t, size_t len) {
     size_t curlen = sdslen(s);
 
@@ -707,10 +747,12 @@ sds sdstrim(sds s, const char *cset) {
 
     sp = start = s;
     ep = end = s+sdslen(s)-1;
+
+    //从头部和尾部逐个字符遍历往中间靠拢，如果字符在cest中，则继续前进
     while(sp <= end && strchr(cset, *sp)) sp++;
     while(ep > sp && strchr(cset, *ep)) ep--;
-    len = (sp > ep) ? 0 : ((ep-sp)+1);
-    if (s != sp) memmove(s, sp, len);
+    len = (sp > ep) ? 0 : ((ep-sp)+1); //全部被去除了，长度就是0
+    if (s != sp) memmove(s, sp, len);  //拷贝内容
     s[len] = '\0';
     sdssetlen(s,len);
     return s;

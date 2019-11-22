@@ -30,9 +30,28 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/** 
+ * 在Redis设计与实现一书中讲到，相比C字符串而言，sds的特性如下：
+ * (1) 常数复杂度获取字符串长度
+ * (2) 杜绝缓冲区溢出
+ * (3) 减少内存重新分配次数
+ *  ① 空间预分配
+ *  ② 惰性空间的释放
+ *  >>如果操作后减少了字符串的大小，比如下面的sdstrim函数，只是在最后修改len属性，
+ * 不会马上释放多余的空间，而是继续保留多余的空间，这样在下次需要增加sds字符串的大小时，
+ * 就不在需要再为其分配空间了。当然，如果之后检查到sds的大小实在太大，也会调用sdsRemoveFreeSpace函数释放多余的空间。
+ * (4) 二进制安全
+ *  >>二进制安全指的是只关心二进制化的字符串，不关心具体格式。只会严格的按照二进制的数据存取，不会妄图以某种特殊格式解析数据。
+ * 比如遇到‘\0’字符不会停止解析。对于C字符串来说，strlen是判断遇到‘\0’之前的字符数量。如果需要保存二进制的数量，就不能通过传
+ * 统的C字符串来保存，因为获取不到它真实的长度。而sds字符串是通过len属性保存字符串的大小，所以它是二进制安全的。
+ */
+
 #ifndef __SDS_H
 #define __SDS_H
 
+/* 
+ * 最大预分配长度
+ */
 #define SDS_MAX_PREALLOC (1024*1024)
 const char *SDS_NOINIT;
 
@@ -40,18 +59,36 @@ const char *SDS_NOINIT;
 #include <stdarg.h>
 #include <stdint.h>
 
+/*
+ * 类型别名，用于指向sdshdr的buf属性 
+ */
 typedef char *sds;
+
+/* NOTE: sds结构体从4.0开始就使用了5种head定义，节省内存的使用，但是不会用到sdshdr5 */
+/* 使用 __attribute__ ((__packed__)) 让编译器取消结构在编译过程中的优化对齐，按照实际
+ *占用字节数进行对齐，这样子两边都需要使用 __attribute__ ((__packed__)) 取消优化对齐，
+ *就不会出现对齐的错位现象。 */
 
 /* Note: sdshdr5 is never used, we just access the flags byte directly.
  * However is here to document the layout of type 5 SDS strings. */
 struct __attribute__ ((__packed__)) sdshdr5 {
+    //flags共8位，低3位保存类型标志，高5位保存字符串长度，小于32（2^5-1）
     unsigned char flags; /* 3 lsb of type, and 5 msb of string length */
+
+    //保存具体的字符串
     char buf[];
 };
 struct __attribute__ ((__packed__)) sdshdr8 {
+    //字符串长度， buf已用的长度
     uint8_t len; /* used */
+
+    //为buf分配的总长度，alloc-len就是sds结构体剩余的空间
     uint8_t alloc; /* excluding the header and null terminator */
+
+    //低3位保存类型标识
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
+
+    //保存具体的字符串
     char buf[];
 };
 struct __attribute__ ((__packed__)) sdshdr16 {
@@ -81,9 +118,24 @@ struct __attribute__ ((__packed__)) sdshdr64 {
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
 #define SDS_HDR_VAR(T,s) struct sdshdr##T *sh = (void*)((s)-(sizeof(struct sdshdr##T)));
+
+/*
+ * "##"被称为连接符，它是一种预处理运算符，用来把两个语言符号（Token组成单个语言符号）。
+ * 比如 SDS_HDR(8,s)，根据宏定义展开是
+ * ((struct sdshdr8 *)((s)-(sizeof(struct sdshdr8))))
+ * 
+ * 具体使用哪一个结构体，sds底层是通过flags属性与SDS_TYPE_MASK做与运算得出具体的类型（具体的实现可见下面的sdslen函数），
+ * 然后再根据类型去获取具体的结构体。
+ */
 #define SDS_HDR(T,s) ((struct sdshdr##T *)((s)-(sizeof(struct sdshdr##T))))
 #define SDS_TYPE_5_LEN(f) ((f)>>SDS_TYPE_BITS)
 
+/* 
+ * 返回sds实际保存的字符串长度
+ * 
+ * 常数复杂度获取字符串长度
+ * T = O(1)
+ */
 static inline size_t sdslen(const sds s) {
     unsigned char flags = s[-1];
     switch(flags&SDS_TYPE_MASK) {
