@@ -528,24 +528,42 @@ void sdsIncrLen(sds s, ssize_t incr) {
 
 /* Grow the sds to have the specified length. Bytes that were not part of
  * the original length of the sds will be set to zero.
+ * 
+ * 将 sds 数字部分扩充至指定长度，未使用的空间以 0 字节填充
  *
  * if the specified length is smaller than the current length, no operation
- * is performed. */
+ * is performed. 
+ * 
+ * 指定的数据部分长度比当前 sds 使用的空间长度还小，不作任何操作
+ * 
+ * T = O(N)
+ * */
 sds sdsgrowzero(sds s, size_t len) {
+    //当前已使用空间
     size_t curlen = sdslen(s);
 
+    //指定的空间比当前已使用空间还小，直接返回
     if (len <= curlen) return s;
+
+    //扩展空间
     s = sdsMakeRoomFor(s,len-curlen);
     if (s == NULL) return NULL;
 
     /* Make sure added region doesn't contain garbage */
+    //将扩展的空间作为已使用空间的那一部分，置为 0 
     memset(s+curlen,0,(len-curlen+1)); /* also set trailing \0 byte */
+
+    //重新设置 sds  已使用空间的长度为指定空间长度
     sdssetlen(s, len);
     return s;
 }
 
 /* Append the specified binary-safe string pointed by 't' of 'len' bytes to the
  * end of the specified sds string 's'.
+ * 
+ * 将长度为 len 的字符串  t 追加到 sds 的字符串末尾
+ * 
+ * T = O(N)
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
@@ -559,26 +577,44 @@ sds sdsgrowzero(sds s, size_t len) {
  * 如果没有足够空间，就为其分配足够的空间，从而杜绝了缓冲区溢出。
  */
 sds sdscatlen(sds s, const void *t, size_t len) {
+
+    //当前已用空间
     size_t curlen = sdslen(s);
 
+    //扩弃 len 长度的空间
+    // T = O(N)
     s = sdsMakeRoomFor(s,len);
     if (s == NULL) return NULL;
+
+    //将指定长度的字符串拷贝到扩充空间的 sds 当中
     memcpy(s+curlen, t, len);
+
+    //重新设置 sds 对象的长度
     sdssetlen(s, curlen+len);
+
+    //将末尾字符设置为 '\0'
     s[curlen+len] = '\0';
     return s;
 }
 
 /* Append the specified null termianted C string to the sds string 's'.
  *
+ * 将给定的字符串 t 追加到sds 的末尾
+ * 
+ * T = O(N)
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
 sds sdscat(sds s, const char *t) {
     return sdscatlen(s, t, strlen(t));
 }
 
+
 /* Append the specified sds 't' to the existing sds 's'.
  *
+ * 将另一个 sds 追加到一个 sds 的末尾
+ * 
+ * T = O(N)
+ * 
  * After the call, the modified sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
 sds sdscatsds(sds s, const sds t) {
@@ -586,7 +622,16 @@ sds sdscatsds(sds s, const sds t) {
 }
 
 /* Destructively modify the sds string 's' to hold the specified binary
- * safe string pointed by 't' of length 'len' bytes. */
+ * safe string pointed by 't' of length 'len' bytes. 
+ * 
+ * 将字符串 t 的前 len 个字符复制到 sds s 当中，
+ * 并在字符串的最后添加终结符。
+ * 
+ * 如果 sds 的长度少于len 个字符，那么扩展 sds
+ * 
+ * T = O(N)
+ * 
+ * */
 sds sdscpylen(sds s, const char *t, size_t len) {
     if (sdsalloc(s) < len) {
         s = sdsMakeRoomFor(s,len-sdslen(s));
@@ -599,7 +644,10 @@ sds sdscpylen(sds s, const char *t, size_t len) {
 }
 
 /* Like sdscpylen() but 't' must be a null-termined string so that the length
- * of the string is obtained with strlen(). */
+ * of the string is obtained with strlen(). 
+ * 
+ * 将字符串复制到 sds 当中，字符串必须是以 '\0' 结尾的
+ * */
 sds sdscpy(sds s, const char *t) {
     return sdscpylen(s, t, strlen(t));
 }
@@ -675,6 +723,7 @@ int sdsull2str(char *s, unsigned long long v) {
  *
  * sdscatprintf(sdsempty(),"%lld\n", value);
  */
+// 根据输入的 long long 值 value， 创建一个 SDS
 sds sdsfromlonglong(long long value) {
     char buf[SDS_LLSTR_SIZE];
     int len = sdsll2str(buf,value);
@@ -683,6 +732,11 @@ sds sdsfromlonglong(long long value) {
 }
 
 /* Like sdscatprintf() but gets va_list instead of being variadic. */
+/**
+ * 打印函数，被 sdscatprintf 所调用
+ * 
+ * T = O(N^2)
+ */
 sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
     va_list cpy;
     char staticbuf[1024], *buf = staticbuf, *t;
@@ -720,6 +774,11 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
     return t;
 }
 
+/*
+ *打印任意数量个字符串，并将这些字符串追加到给定 sds 的末尾
+ * 
+ * T = O(N^2)
+ */
 /* Append to the sds string 's' a string obtained using printf-alike format
  * specifier.
  *
@@ -851,6 +910,9 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
     return s;
 }
 
+/*
+ *对 sds 左右两端进行修剪，清除其中 cset 指定的所有字符
+ */
 /* Remove the part of the string from left and from right composed just of
  * contiguous characters found in 'cset', that is a null terminted C string.
  *
