@@ -32,18 +32,32 @@
 #define __ADLIST_H__
 
 /* Node, List, and Iterator are the only data structures used currently. */
+/**
+ * 双端列表使用到的数据结构有：节点，链表和迭代器
+ */
 
+/**
+ * listNode 前一个节点，后一个节点，当前值(指针)
+ */
 typedef struct listNode {
     struct listNode *prev;
     struct listNode *next;
     void *value;
 } listNode;
 
+/**
+ * listIter 指向下一个节点，以及迭代器的方向
+ * **/
 typedef struct listIter {
     listNode *next;
     int direction;
 } listIter;
 
+/**
+ * 双向链表 list 包含链表头 head，链表尾 tail ，
+ * 链表的长度，以及对链表进行 dup 、 free 、 match 
+ * 的勾子函数。
+ */
 typedef struct list {
     listNode *head;
     listNode *tail;
@@ -53,6 +67,9 @@ typedef struct list {
     unsigned long len;
 } list;
 
+/**
+ * 将一些简单的方法调用，设置成宏
+ */
 /* Functions implemented as macros */
 #define listLength(l) ((l)->len)
 #define listFirst(l) ((l)->head)
